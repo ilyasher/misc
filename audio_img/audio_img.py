@@ -23,36 +23,28 @@ def encode_image(img_filename, audio_filename, new_img_filename):
         img = new_img
     height, width, _ = img.shape
 
-    # Round width to the nearest even number
-    img = img[:,:2*int(width/2),:]
+    # Ensure number of pixels is divisible by 8.
+    img = img[:2*int(height/2),:4*int(width/4),:]
+    height, width, _ = img.shape
 
     # Reduce resolution of image.
     # Last 2 out of 8 bits are cleared from each RGB value.
     img -= img % 4
 
-    # Reduce sound from 16-bit to 12-bit
-    # This is so that each value fits into 2 pixels, since each pixel (uint8)
-    # now has 6 bits of free space.
-    sound_data = np.right_shift(sound_data, 4)
-
-    # Effectively we are pairing pixels up so that each value in the array has
-    # free bits we can write to. Now one value from the sound_data can fit perfectly
-    # into this array.
-    img_reshaped = np.reshape(img, (height, int(width / 2), 6))
+    # Resize image so that each value can fit 16 bits.
+    img_reshaped = np.reshape(img, (int(height*width*3/8), 8))
 
     # Reshape the sound array into the same size as the image.
     # If the sound data is larger than the image, shorten the audio clip.
-    sound_resized = np.zeros(shape=img_reshaped.shape[0]*img_reshaped.shape[1], dtype=np.int16)
+    sound_resized = np.zeros(shape=img_reshaped.shape[0], dtype=np.int16)
     if sound_data.shape[0] > sound_resized.shape[0]:
         sound_data = sound_data[:sound_resized.shape[0]]
     sound_resized[:sound_data.shape[0]] = sound_data
-    sound_reshaped = np.reshape(sound_resized, img_reshaped.shape[:2])
 
-    # Store 2 bits of the sound data into each RGB value.
-    for i in range(6):
-        audio_bits = (sound_reshaped % 4).astype(np.uint8)
-        img_reshaped[:,:,i] += audio_bits
-        sound_reshaped = np.right_shift(sound_reshaped, 2)
+    # Store 2 bits of the sound data into image cell.
+    for i in range(8):
+        img_reshaped[:, i] += (sound_resized % 4).astype(np.uint8)
+        sound_resized = np.right_shift(sound_resized, 2)
 
     # Reshape image to original size
     img = np.reshape(img_reshaped, img.shape)
@@ -69,23 +61,18 @@ def decode_image(img_filename, audio_filename=None, play_sound=False):
 
     # Load source image
     img = np.array(Image.open(img_filename))
+    height, width, _ = img.shape
 
     # Keep only the last 2 bits of each pixel, and reshape image so that
     # each img[y, x] contains 12 bits of sound info.
     img = img % 4
-    img = np.reshape(img, (img.shape[0], int(img.shape[1] / 2), 6))
+    img_reshaped = np.reshape(img, (int(height*width*3/8), 8))
 
     # Undo the encode_image process
-    sound_data = np.zeros(shape=img.shape[:2], dtype=np.int16)
-    for i in range(6)[::-1]:
-        audio_bits = img[:,:,i]
-        sound_data += audio_bits
+    sound_data = np.zeros(shape=img_reshaped.shape[0], dtype=np.int16)
+    for i in range(8)[::-1]:
         sound_data = np.left_shift(sound_data, 2)
-
-    sound_data = np.left_shift(sound_data, 2)
-
-    # Restore the sound to be shaped like a sequence
-    sound_data = sound_data.flatten()
+        sound_data += img_reshaped[:, i]
 
     # Save sound as a file
     rate = 8000
